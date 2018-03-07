@@ -22,15 +22,13 @@ class GoogleMapper(object):
     Note, standard google API allows for 2500 free requests
     per day, with a max of 50/sec queries.  Make sure not
     to go over these limits or you may be charged
-
-    Without an API KEY this script will only pull 1-3 addresses
-    Before throwing an error
     '''
 
     URL = 'https://maps.googleapis.com/maps/api/geocode/json?address={address}&key={api_key}'
     
     def __init__(self, address):
         self.name = address
+        self.result = None
         self.geo_attributes = None
         self._main()
         
@@ -42,6 +40,59 @@ class GoogleMapper(object):
                        ).replace('&', 'and'
                        ).replace(' ', '+')
     
+    class AddressParser(object):
+        def __init__(self, address_components):
+            self.ac = address_components
+            
+        def try_dec(func):
+            def wrapper(*args, **kwargs):
+                try:
+                    return func(*args, **kwargs)
+                except IndexError:
+                    return None
+            return wrapper
+        
+        def filter_list(self, filter_condition, length='long_name'):
+            return [a[length] for a in self.ac if filter_condition in a['types']][0]
+            
+        @try_dec
+        def parse_street(self):
+            return self.filter_list('street_number')
+        
+        @try_dec
+        def parse_route(self):
+            return self.filter_list('route')
+        
+        @try_dec
+        def parse_city(self):
+            return self.filter_list('locality')
+        
+        @try_dec
+        def parse_county(self):
+            return self.filter_list('administrative_area_level_2')
+        
+        @try_dec
+        def parse_state(self):
+            return self.filter_list('administrative_area_level_1')
+        
+        @try_dec
+        def parse_state_abbr(self):
+            return self.filter_list('administrative_area_level_1',length='short_name')
+        
+        @try_dec
+        def parse_country(self):
+            return self.filter_list('country')
+        
+        @try_dec
+        def parse_country_abbr(self):
+            return self.filter_list('country', length='short_name')
+        
+        @try_dec
+        def parse_postal(self):
+            return self.filter_list('postal_code')
+        
+            
+    
     def _parse_result(self, result):
         attrs = {}
 
@@ -52,15 +103,18 @@ class GoogleMapper(object):
         attrs['lat'] = lat_lon['lat']
         attrs['lon'] = lat_lon['lng']
 
-        address_components = r_json['results'][0]['address_components']
-        attrs['city_long'] = address_components[0]['long_name']
-        attrs['city_short'] = address_components[0]['short_name']
-        attrs['county_long'] = address_components[1]['long_name']
-        attrs['county_short'] = address_components[1]['short_name']
-        attrs['state_long'] = address_components[2]['long_name']
-        attrs['state_short'] = address_components[2]['short_name']
-        attrs['country_long'] = address_components[0]['long_name']
-        attrs['country_short'] = city_long = address_components[0]['short_name']
+        addr = r_json['results'][0]['address_components']
+        A = self.AddressParser(addr)
+        
+        attrs['street_num'] = A.parse_street()
+        attrs['route'] = A.parse_route()
+        attrs['city'] = A.parse_city()
+        attrs['county'] = A.parse_county()
+        attrs['state'] = A.parse_state()
+        attrs['state_abbr'] = A.parse_state_abbr()
+        attrs['country'] = A.parse_country()
+        attrs['country_abbr'] = A.parse_country_abbr()
+        attrs['postal'] = A.parse_postal()
 
         attrs['name'] = self.name
         
@@ -71,6 +125,7 @@ class GoogleMapper(object):
         formatted_url = self.URL.format(address=encoded_name, api_key=API_KEY)
         
         r = requests.get(formatted_url).content
+        self.result = r
         self.geo_attributes = self._parse_result(r)
 
 
@@ -92,9 +147,9 @@ if __name__ == '__main__':
         d[key] = [a.geo_attributes[key] for a in geo_list]
 
     df = pd.DataFrame(d)[['name', 'lat', 'lon', 
-                          'city_short', 'city_long', 'county_short', 
-                          'county_long', 'state_short', 'state_long', 
-                          'country_short', 'country_long']]
+                          'street_num', 'route', 'city', 
+                          'county', 'state', 'state_abbr',
+                          'country', 'country_abbr', 'postal']]
 
     df.to_csv(OUTPUT_FILE, index=False)
 
